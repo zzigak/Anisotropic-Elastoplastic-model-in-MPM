@@ -34,13 +34,9 @@ The constitutive response is derived from the **anisotropic hyperelastic potenti
 - Places **N_Line** yarns horizontally, spacing **dlx**.  
 - For every segment between two type-2 vertices  
 - type-3 particle is centered:  
-  $$
-  \mathbf x_3 = \frac{\mathbf x_2^{(l)} + \mathbf x_2^{(r)}}{2}
-  $$  
+  $$\mathbf x_3 = \frac{\mathbf x_2^{(l)} + \mathbf x_2^{(r)}}{2}$$  
 -  initial frame  
-  $$
-  \mathbf D = \Bigl[\, \mathbf x_2^{(r)} - \mathbf x_2^{(l)} \;\Big|\; \mathbf R_{90°}(\mathbf x_2^{(r)} - \mathbf x_2^{(l)})\Bigr], \qquad \mathbf R_{90°} = \begin{bmatrix}0&-1\\1&0\end{bmatrix}.
-  $$  
+  $$\mathbf D = \Bigl[\, \mathbf x_2^{(r)} - \mathbf x_2^{(l)} \;\Big|\; \mathbf R_{90°}(\mathbf x_2^{(r)} - \mathbf x_2^{(l)})\Bigr], \qquad \mathbf R_{90°} = \begin{bmatrix}0&-1\\1&0\end{bmatrix}.$$  
 - inverse stored once: $\mathbf D^{-1}$.
 
 
