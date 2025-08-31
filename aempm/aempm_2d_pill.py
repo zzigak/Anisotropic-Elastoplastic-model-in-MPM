@@ -4,7 +4,7 @@ import math
 
 ti.init(arch = ti.gpu)
 
-# Three circles parameters
+# ===== Obstacle Parameters =====
 Circle1_Center = ti.Vector([0.25, 0.6])
 Circle1_Radius = 0.08
 
@@ -14,47 +14,43 @@ Circle2_Radius = 0.08
 Circle3_Center = ti.Vector([0.75, 0.5])
 Circle3_Radius = 0.08
 
-# Attractor parameters
+# ===== Interactive Forces =====
 attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(2, dtype=float, shape=())
 
+# ===== Grid Parameters =====
 dim = 2
 n_grid = 256
 dx = 1 / n_grid
 inv_dx = 1 / dx
 dt = 4e-5  # Increased for faster simulation
 
+# ===== Material Parameters =====
 p_rho = 1
-
-# Material Parameters
 E = 1000 # stretch
 gamma = 500 # shear
 k = 1000 # normal
 
-# number of lines
-N_Line = 12
-# line space distance
-dlx = 0.015
-# type2 particle count per line
-ln_type2 = 200
-
+# ===== Yarn Configuration =====
+N_Line = 12  # number of lines
+dlx = 0.015  # line space distance
+ln_type2 = 200  # type2 particle count per line
 start_pos = ti.Vector([0.2, 0.8])
+Length = 0.75  # line length
+sl = Length/ (ln_type2-1)
 
 ln_type3 = ln_type2 - 1
 n_type2 = N_Line* ln_type2
 n_type3 = N_Line* ln_type3
+n_segment = n_type3
 
-#line length
-Length = 0.75
-sl = Length/ (ln_type2-1)
-
-#type2
+# ===== Type 2 Particles (nodes) =====
 x2 = ti.Vector.field(2, dtype=float, shape=n_type2) # position 
 v2 = ti.Vector.field(2, dtype=float, shape=n_type2) # velocity
 C2 = ti.Matrix.field(2, 2, dtype=float, shape=n_type2) # affine velocity field
 volume2 =  dx*Length / (ln_type3+ln_type2)
 
-#type3
+# ===== Type 3 Particles (quadrature points) =====
 x3 = ti.Vector.field(2, dtype=float, shape=n_type3) # position
 v3 = ti.Vector.field(2, dtype=float, shape=n_type3) # velocity
 C3 = ti.Matrix.field(2, 2, dtype=float, shape=n_type3) # affine velocity field
@@ -64,16 +60,17 @@ D3 = ti.Matrix.field(2, 2, dtype=float, shape=n_type3) # Initial material direct
 d3 = ti.Matrix.field(2, 2, dtype=float, shape=n_type3)
 volume3 = volume2
 
+# ===== Grid Fields =====
 grid_v = ti.Vector.field(2, dtype= float, shape=(n_grid, n_grid))
 grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))
 grid_f = ti.Vector.field(2, dtype= float, shape = (n_grid, n_grid))
 
-n_segment = n_type3
-
+# ===== Constants =====
 ROT90 = ti.Matrix([[0,-1.0],[1.0,0]])
 
 @ti.func
-def QR2(Mat): #2x2 mat, Gram–Schmidt Orthogonalization
+def QR2(Mat): 
+    """QR decomposition for 2x2 matrix using Gram-Schmidt."""
     c0 = ti.Vector([Mat[0,0],Mat[1,0]])
     c1 = ti.Vector([Mat[0,1],Mat[1,1]])
     r11 = c0.norm(1e-6)
@@ -88,7 +85,8 @@ def QR2(Mat): #2x2 mat, Gram–Schmidt Orthogonalization
 
 
 @ti.kernel
-def Particle_To_Grid():
+def p2g():
+    """Transfer particle momentum to grid."""
     for p in x2:
         base = (x2[p] * inv_dx - 0.5).cast(int)
         fx = x2[p] * inv_dx - base.cast(float)
@@ -117,7 +115,7 @@ def Particle_To_Grid():
 
 
 @ti.kernel
-def Grid_Force():
+def grid_force():
     """
     Computes stress from QR-decomposed F (Q,R) and builds a small "A" matrix of
     partial derivatives in R-space:
@@ -130,7 +128,7 @@ def Grid_Force():
     # Zero-grid forcing is done in Reset; add forces from particles
     for p in x3:
         # Get attached type2 endpoints for this quadrature particle
-        l, n = GetType2FromType3(p)
+        l, n = t2_from_t3(p)
 
         # local weights for x3 particle
         base = (x3[p] * inv_dx - 0.5).cast(int)
@@ -247,7 +245,8 @@ def Grid_Force():
 
 bound = 3
 @ti.kernel
-def Grid_Collision():
+def grid_collision():
+    """Apply boundary conditions and external forces on grid."""
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i,j] +=  grid_f[i,j] * dt
@@ -293,7 +292,8 @@ def Grid_Collision():
 
 
 @ti.kernel
-def Grid_To_Particle():
+def g2p():
+    """Transfer grid velocities back to particles."""
     for p in x2:
         base = (x2[p] * inv_dx - 0.5).cast(int)
         fx = x2[p] * inv_dx - base.cast(float)
@@ -324,9 +324,10 @@ def Grid_To_Particle():
 
 
 @ti.kernel
-def Update_Particle_State():
+def update_state():
+    """Update type3 particle states from type2 neighbors."""
     for p in x3:
-        l, n = GetType2FromType3(p)
+        l, n = t2_from_t3(p)
         v3[p] = 0.5 * (v2[l] + v2[n])
         x3[p] = 0.5 * (x2[l] + x2[n])
 
@@ -341,7 +342,7 @@ cf = 0.05
 # cf = 0.1 # You can tune this value
 
 @ti.kernel
-def Return_Mapping():
+def return_mapping():
     """
     Corrected plasticity model for 2D curves based on JGT17, Sec 4.5.
     This projects the deformation gradient back to the feasible (yield) surface
@@ -381,21 +382,23 @@ def Return_Mapping():
 
 
 @ti.kernel
-def Reset():
+def reset():
+    """Clear grid fields for next timestep."""
     for i, j in grid_m:
         grid_v[i, j] = [0, 0]
         grid_m[i, j] = 0
         grid_f[i, j] = [0.0,0.0]
 
 
-#get type2 from type3
 @ti.func
-def GetType2FromType3(index):
+def t2_from_t3(index):
+    """Get type2 particle indices from type3 index."""
     index += index // ln_type3
     return index, index+1
 
 @ti.kernel
-def initialize():
+def init_scene():
+    """Initialize particle positions and material states."""
     for i in range(n_type2):
         sq = i // ln_type2
         x2[i] = ti.Vector([start_pos[0]+ (i- sq* ln_type2) * sl, start_pos[1] + sq* dlx])
@@ -403,7 +406,7 @@ def initialize():
         C2[i] =  ti.Matrix([[0,0],[0,0]])
 
     for i in range(n_segment):
-        l, n = GetType2FromType3(i)
+        l, n = t2_from_t3(i)
 
         x3[i] = 0.5*(x2[l] + x2[n]) # Quadrature particle position
         v3[i] = ti.Vector([0, 0])
@@ -432,7 +435,7 @@ def initialize():
 
 
 def main():
-    initialize()
+    init_scene()
 
     rainbow_colors = [
         0xE74C3C,  # Red
@@ -484,13 +487,13 @@ def main():
             attractor_strength[None] = -1
             
         for _ in range(50):  # Increased for smoother real-time speed
-            Reset()
-            Particle_To_Grid()
-            Grid_Force()
-            Grid_Collision()
-            Grid_To_Particle()
-            Update_Particle_State()
-            Return_Mapping()
+            reset()
+            p2g()
+            grid_force()
+            grid_collision()
+            g2p()
+            update_state()
+            return_mapping()
 
         gui.clear(0xFFFFFF)  # White background
 
