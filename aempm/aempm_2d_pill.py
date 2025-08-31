@@ -340,45 +340,75 @@ def update_state():
 
 cf = 0.05
 # cf = 0.1 # You can tune this value
-
 @ti.kernel
 def return_mapping():
     """
-    Corrected plasticity model for 2D curves based on JGT17, Sec 4.5.
-    This projects the deformation gradient back to the feasible (yield) surface
-    to model Coulomb friction.
+    Two-step return mapping for 2-D yarns:
+    1. Mohr-Coulomb on r22 (volume-preserving)
+    2. Anisotropic shear clamp on r12
     """
     for p in x3:
-        # Decompose F into elastic rotation Q and stretch R
         Q, R = QR2(F3[p])
         r11, r12, r22 = R[0, 0], R[0, 1], R[1, 1]
 
-        # --- Apply Plastic Yield Condition ---
-
-        # If normal is expanding (r22 > 1), there's no contact.
+        # Mohr-Coulomb on r22 (JGT17 Eq. 32-34)
         if r22 > 1.0:
-            r12 = 0.0 # Release shear
-            r22 = 1.0 # Forget expansion, reset to rest length
-        
-        # If normal is compressed (r22 <= 1), apply friction.
+            r22 = 1.0
+            r12 = 0.0
         else:
-            # yield strength depends on the friction coefficient `cf` and the amount of compression, i.e. "normal force"
-            # A simple, effective model is yield_strength = cf * (1 - r22).
-            yield_strength = cf * (1.0 - r22)
-            
-            # Clamp the shear component |r12| to the yield strength.
-            if ti.abs(r12) > yield_strength:
-                r12 = ti.max(-yield_strength, ti.min(yield_strength, r12))
+            # normal stress σₙ = k(r22 - 1)  (negative in compression)
+            # Mohr-Coulomb: |τ| + cf σₙ ≤ 0   ⇒   |r12| + cf (r22 - 1) ≤ 0
+            denom = 1.0 + cf * cf
+            r22_proj = (1.0 + cf * ti.abs(r12)) / denom
+            r22 = max(r22, r22_proj)
 
-        # Reconstruct the projected R matrix
+        #  shear clamp after r22 projection 
+        max_shear = cf * (1.0 - r22)
+        r12 = ti.max(-max_shear, ti.min(max_shear, r12))
+
+        # reconstruct
         R_new = ti.Matrix([[r11, r12], [0.0, r22]])
+        F3[p] = Q @ R_new
+        d3[p] = F3[p] @ D3[p]
 
-        # Reconstruct the deformation gradient from the projected R
-        F_new = Q @ R_new
-        F3[p] = F_new
+# @ti.kernel
+# def return_mapping():
+#     """
+#     Corrected plasticity model for 2D curves based on JGT17, Sec 4.5.
+#     This projects the deformation gradient back to the feasible (yield) surface
+#     to model Coulomb friction.
+#     """
+#     for p in x3:
+#         # Decompose F into elastic rotation Q and stretch R
+#         Q, R = QR2(F3[p])
+#         r11, r12, r22 = R[0, 0], R[0, 1], R[1, 1]
 
-        # Update the deformed material directions `d3` to be consistent with the new plastic deformation. d = F_new @ D
-        d3[p] = F_new @ D3[p]
+#         # --- Apply Plastic Yield Condition ---
+
+#         # If normal is expanding (r22 > 1), there's no contact.
+#         if r22 > 1.0:
+#             r12 = 0.0 # Release shear
+#             r22 = 1.0 # Forget expansion, reset to rest length
+        
+#         # If normal is compressed (r22 <= 1), apply friction.
+#         else:
+#             # yield strength depends on the friction coefficient `cf` and the amount of compression, i.e. "normal force"
+#             # A simple, effective model is yield_strength = cf * (1 - r22).
+#             yield_strength = cf * (1.0 - r22)
+            
+#             # Clamp the shear component |r12| to the yield strength.
+#             if ti.abs(r12) > yield_strength:
+#                 r12 = ti.max(-yield_strength, ti.min(yield_strength, r12))
+
+#         # Reconstruct the projected R matrix
+#         R_new = ti.Matrix([[r11, r12], [0.0, r22]])
+
+#         # Reconstruct the deformation gradient from the projected R
+#         F_new = Q @ R_new
+#         F3[p] = F_new
+
+#         # Update the deformed material directions `d3` to be consistent with the new plastic deformation. d = F_new @ D
+#         d3[p] = F_new @ D3[p]
 
 
 @ti.kernel
